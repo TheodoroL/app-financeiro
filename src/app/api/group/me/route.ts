@@ -12,12 +12,7 @@ export async function GET () {
 
   const group = await prisma.financialGroup.findFirst({
     where: {
-      members: {
-        some: {
-          userId: session.user.userId,
-          isOwner: true,
-        },
-      },
+      ownerId: session.user.userId,
       type: "PERSONAL",
     },
     include: {
@@ -27,9 +22,8 @@ export async function GET () {
           id: true,
           amount: true,
           type: true,
-          isPaid: true,
+          status: true,
           description: true,
-          creditCardId: true,
           bankAccountId: true,
         },
       },
@@ -40,16 +34,12 @@ export async function GET () {
     return Response.json({ error: "Grupo pessoal não encontrado" }, { status: HTTP_STATUS.NOT_FOUND });
   }
 
-  // Calcular saldo das transações (apenas as que NÃO têm cartão/banco vinculado)
-  const transactionBalance = group.transactions.reduce((acc, t) => {
-    // Pular transações não pagas no cálculo do saldo real
-    if (!t.isPaid) {
+  const transactionBalance = group.transactions.reduce((acc: number, t: { status: string; bankAccountId: number | null; type: string; amount: number }) => {
+    if (t.status !== "PAID") {
       return acc;
     }
 
-    // Pular transações vinculadas a cartão de crédito ou conta bancária
-    // Essas já estão refletidas no saldo da conta/limite do cartão
-    if (t.creditCardId || t.bankAccountId) {
+    if (t.bankAccountId) {
       return acc;
     }
 
@@ -63,7 +53,6 @@ export async function GET () {
     return acc;
   }, 0);
 
-  // Buscar saldo das contas bancárias do usuário
   const bankAccounts = await prisma.bankAccount.findMany({
     where: {
       userId: session.user.userId,
@@ -75,70 +64,11 @@ export async function GET () {
     },
   });
 
-  // Calcular saldo total das contas bancárias
   const bankBalance = bankAccounts.reduce((sum, account) => sum + account.balance, 0);
 
-  // Buscar transações vinculadas às contas bancárias (apenas as pagas e sem cartão de crédito)
-  const bankTransactions = await prisma.transaction.findMany({
-    where: {
-      bankAccountId: { "in": bankAccounts.map((acc) => acc.id) },
-      isPaid: true,
-      creditCardId: null, // Excluir transações de cartão de crédito
-    },
-    select: {
-      amount: true,
-      type: true,
-    },
-  });
+  const totalBalance = transactionBalance + bankBalance;
 
-  // Calcular impacto das transações nas contas bancárias
-  const bankTransactionBalance = bankTransactions.reduce((sum, t) => sum + (t.type === "INCOME" ? t.amount : -t.amount), 0);
-
-  // Buscar cartões de crédito do usuário
-  const creditCards = await prisma.creditCard.findMany({
-    where: {
-      userId: session.user.userId,
-      isActive: true,
-      type: { "in": [ "CREDIT", "BOTH" ] },
-    },
-    include: {
-      transactions: {
-        where: {
-          type: "EXPENSE",
-          status: { "in": [ "PENDING", "PAID" ] },
-        },
-      },
-    },
-  });
-
-  // Calcular limite total disponível nos cartões de crédito
-  let totalCreditLimit = 0;
-  let totalCreditUsed = 0;
-  const creditCardsSummary = creditCards.map((card) => {
-    const usedAmount = card.transactions.reduce((sum, t) => sum + t.amount, 0);
-    const availableLimit = (card.creditLimit || 0) - usedAmount;
-
-    totalCreditLimit += card.creditLimit || 0;
-    totalCreditUsed += usedAmount;
-
-    return {
-      id: card.id,
-      name: card.name,
-      last4Digits: card.last4Digits,
-      brand: card.brand,
-      creditLimit: card.creditLimit,
-      usedAmount,
-      availableLimit: Math.max(0, availableLimit),
-    };
-  });
-
-  const availableCreditLimit = totalCreditLimit - totalCreditUsed;
-
-  // Saldo total = transações em dinheiro + saldo das contas + transações das contas + limite de crédito disponível
-  const cashBalance = transactionBalance + bankBalance + bankTransactionBalance;
-  const totalBalance = cashBalance + availableCreditLimit;
-
-  logger.info(`Saldo calculado para grupo pessoal ${group.name} (ID: ${group.id}): Dinheiro: ${cashBalance}, Crédito disponível: ${availableCreditLimit}, Total: ${totalBalance}`);
+  logger.info(`Saldo calculado para grupo pessoal ${group.name} (ID: ${group.id}): Dinheiro: ${transactionBalance}, Contas: ${bankBalance}, Total: ${totalBalance}`);
 
   return Response.json({
     data: {
@@ -147,12 +77,9 @@ export async function GET () {
       description: group.description,
       balance: totalBalance,
       breakdown: {
-        cashBalance, // Dinheiro + contas bancárias
-        availableCreditLimit, // Limite de crédito disponível
-        totalCreditLimit, // Limite total de crédito
-        totalCreditUsed, // Total usado nos cartões
+        cashBalance: transactionBalance, // Transações em dinheiro
+        bankBalance, // Saldo das contas bancárias
       },
-      creditCards: creditCardsSummary,
     },
   });
 }

@@ -1,17 +1,15 @@
 import { auth } from "@/lib/shared/auth";
 import { prisma } from "@/lib/shared/prisma";
-import { CategorySchema } from "@/lib/shared/schemas/category";
 import { NextRequest } from "next/server";
 
 export async function GET (request: NextRequest) {
   try {
     const session = await auth();
 
-    if (session === null || !session.user) {
+    if (!session?.user) {
       return Response.json({ error: "Não autorizado" }, { status: 401 });
     }
 
-    // Obter groupId da query string
     const url = new URL(request.url);
     const groupIdParam = url.searchParams.get("groupId");
 
@@ -25,20 +23,13 @@ export async function GET (request: NextRequest) {
       return Response.json({ error: "groupId inválido" }, { status: 400 });
     }
 
-    // Verificar se o usuário é membro do grupo
-    const isMember = await prisma.financialGroupMember.findFirst({
-      where: {
-        userId: session.user.userId,
-        financialGroupId: groupId,
-      },
-    });
+    const isMember = await prisma.financialGroupMember.findFirst({ where: { userId: session.user.userId, financialGroupId: groupId } });
 
     if (!isMember) {
       return Response.json({ error: "Acesso negado ao grupo" }, { status: 403 });
     }
 
-    // Buscar categorias do grupo
-    const categories = await prisma.financialCategory.findMany({
+    const categories = await prisma.groupCategory.findMany({
       where: { groupId },
       orderBy: { name: "asc" },
     });
@@ -55,47 +46,30 @@ export async function POST (request: Request) {
   try {
     const session = await auth();
 
-    if (session === null || !session.user) {
+    if (!session?.user) {
       return Response.json({ error: "Não autorizado" }, { status: 401 });
     }
 
     const body = await request.json();
-    const { success, data, error } = await CategorySchema.safeParseAsync(body);
+    const { name, groupId } = body;
 
-    if (!success) {
-      return Response.json({
-        error: "Dados inválidos",
-        details: error.issues,
-      }, { status: 400 });
+    if (!name || !groupId) {
+      return Response.json({ error: "Nome e groupId são obrigatórios" }, { status: 400 });
     }
 
-    const { name, groupId } = data;
-
-    // Verificar se o usuário é membro do grupo
-    const isMember = await prisma.financialGroupMember.findFirst({
-      where: {
-        userId: session.user.userId,
-        financialGroupId: groupId,
-      },
-    });
+    const isMember = await prisma.financialGroupMember.findFirst({ where: { userId: session.user.userId, financialGroupId: groupId } });
 
     if (!isMember) {
       return Response.json({ error: "Acesso negado ao grupo" }, { status: 403 });
     }
 
-    // Verificar se já existe uma categoria com o mesmo nome
-    const existingCategory = await prisma.financialCategory.findFirst({ where: { name, groupId } });
+    const existingCategory = await prisma.groupCategory.findFirst({ where: { name, groupId } });
 
     if (existingCategory) {
-      return Response.json({ error: "Já existe uma categoria com esse nome neste grupo" }, { status: 409 });
+      return Response.json({ error: "Categoria já existe neste grupo" }, { status: 409 });
     }
 
-    const newCategory = await prisma.financialCategory.create({
-      data: {
-        name,
-        groupId,
-      },
-    });
+    const newCategory = await prisma.groupCategory.create({ data: { name, groupId } });
 
     return Response.json(newCategory, { status: 201 });
   } catch (error) {

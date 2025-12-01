@@ -5,15 +5,13 @@ import { RouteParams } from "@/lib/shared/types";
 import { NextRequest } from "next/server";
 
 function checkUserPermission (
-  transaction: { createdById: number; group: { members: { userId: number; isOwner: boolean }[] } },
+  transaction: { createdById: number; group: { ownerId: number; members: { userId: number }[] } },
   userId: number,
 ) {
   const isCreator = transaction.createdById === userId;
-  const isGroupAdmin = transaction.group.members.some(
-    (m) => m.userId === userId && m.isOwner,
-  );
+  const isGroupOwner = transaction.group.ownerId === userId;
 
-  return isCreator || isGroupAdmin;
+  return isCreator || isGroupOwner;
 }
 
 function determineBalanceOperation (isPaid: boolean, transactionType: string) {
@@ -25,24 +23,16 @@ function determineBalanceOperation (isPaid: boolean, transactionType: string) {
 }
 
 async function handleBankBalanceUpdate (
-  existingTransaction: {
-    bankAccountId: number | null;
-    creditCard: { type: string } | null;
-  },
-  transaction: { isPaid: boolean; type: string; amount: number },
+  existingTransaction: { bankAccountId: number | null },
+  transaction: { status: string; type: string; amount: number },
   shouldUpdate: boolean,
 ) {
   if (!shouldUpdate || !existingTransaction.bankAccountId) {
     return;
   }
 
-  const isCredit = existingTransaction.creditCard?.type === "CREDIT";
-
-  if (isCredit) {
-    return;
-  }
-
-  const operation = determineBalanceOperation(transaction.isPaid, transaction.type);
+  const isPaid = transaction.status === "PAID";
+  const operation = determineBalanceOperation(isPaid, transaction.type);
 
   await prisma.bankAccount.update({
     where: { id: existingTransaction.bankAccountId },
@@ -65,15 +55,9 @@ function processStatusUpdate (
   let shouldUpdateBalance = false;
 
   if (body.status === "PAID") {
-    updateData.isPaid = true;
-    updateData.paidAt = new Date();
     shouldUpdateBalance = !wasAlreadyPaid;
   } else if ([ "PENDING", "OVERDUE", "CANCELLED" ].includes(body.status)) {
-    updateData.isPaid = false;
-    updateData.paidAt = null;
     shouldUpdateBalance = wasAlreadyPaid;
-  } else if (body.status === "PARTIALLY_PAID") {
-    updateData.isPaid = false;
   }
 
   return shouldUpdateBalance;
@@ -103,7 +87,8 @@ export async function GET (
         createdById: session.user.userId,
       },
       include: {
-        category: true,
+        userCategory: true,
+        groupCategory: true,
         group: true,
         createdBy: {
           select: {
@@ -150,10 +135,7 @@ export async function PUT (
     // Verificar se a transação existe
     const existingTransaction = await prisma.transaction.findUnique({
       where: { id: transactionId },
-      include: {
-        group: { include: { members: true } },
-        creditCard: { select: { type: true } },
-      },
+      include: { group: { include: { members: true } } },
     });
 
     if (!existingTransaction) {
@@ -174,7 +156,7 @@ export async function PUT (
     const shouldUpdateBankBalance = processStatusUpdate(
       body,
       updateData,
-      existingTransaction.isPaid,
+      existingTransaction.status === "PAID",
     );
 
     if (body.categoryId !== undefined) {
@@ -185,7 +167,8 @@ export async function PUT (
       where: { id: transactionId },
       data: updateData,
       include: {
-        category: true,
+        userCategory: true,
+        groupCategory: true,
         group: true,
         createdBy: {
           select: {
@@ -215,20 +198,13 @@ export async function PUT (
 
 async function revertBankBalance (
   existingTransaction: {
-    isPaid: boolean;
+    status: string;
     bankAccountId: number | null;
-    creditCard: { type: string } | null;
     type: string;
     amount: number;
   },
 ) {
-  if (!existingTransaction.isPaid || !existingTransaction.bankAccountId) {
-    return;
-  }
-
-  const isCredit = existingTransaction.creditCard?.type === "CREDIT";
-
-  if (isCredit) {
+  if (existingTransaction.status !== "PAID" || !existingTransaction.bankAccountId) {
     return;
   }
 
@@ -263,10 +239,7 @@ export async function DELETE (
     // Verificar se a transação existe
     const existingTransaction = await prisma.transaction.findUnique({
       where: { id: transactionId },
-      include: {
-        group: { include: { members: true } },
-        creditCard: { select: { type: true } },
-      },
+      include: { group: { include: { members: true } } },
     });
 
     if (!existingTransaction) {

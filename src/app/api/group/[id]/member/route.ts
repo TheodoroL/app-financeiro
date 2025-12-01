@@ -21,7 +21,6 @@ export async function POST (req: NextRequest, { params }: { params: Promise<{ id
     data: {
       userId,
       financialGroupId: groupId,
-      isOwner: false,
     },
   });
 

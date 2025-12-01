@@ -17,7 +17,6 @@ export async function POST (req: NextRequest) {
     return NextResponse.json({ error: "Dados obrigatórios" }, { status: 400 });
   }
 
-  // Verifica se o grupo existe e se o remetente é membro
   const group = await prisma.financialGroup.findUnique({
     where: { id: groupId },
     include: { members: true },
@@ -33,22 +32,18 @@ export async function POST (req: NextRequest) {
     return NextResponse.json({ error: "Acesso negado ao grupo" }, { status: 403 });
   }
 
-  // Procurar usuário alvo pelo e-mail
   const targetUser = await prisma.user.findUnique({ where: { email } });
 
   if (!targetUser) {
-    // Não revelar se o usuário existe — responder com mensagem genérica
     return NextResponse.json({ message: "Seu convite foi enviado, caso exista um usuário com este endereço de e-mail, ele será notificado." });
   }
 
-  // Se já for membro, não criar convite (retorna a mesma mensagem)
   const alreadyMember = await prisma.financialGroupMember.findUnique({ where: { userId_financialGroupId: { userId: targetUser.id, financialGroupId: groupId } } });
 
   if (alreadyMember) {
     return NextResponse.json({ message: "Seu convite foi enviado, caso exista um usuário com este endereço de e-mail, ele será notificado." });
   }
 
-  // Evita duplicar convites pendentes
   const existingInvitation = await prisma.groupInvitation.findFirst({
     where: {
       receiverId: targetUser.id,
@@ -83,19 +78,16 @@ export async function PUT (req: NextRequest) {
     return NextResponse.json({ error: "Dados obrigatórios" }, { status: 400 });
   }
 
-  // Buscar convite existente
   const invitation = await prisma.groupInvitation.findUnique({ where: { id } });
 
   if (!invitation) {
     return NextResponse.json({ error: "Convite não encontrado" }, { status: 404 });
   }
 
-  // Somente o destinatário pode aceitar/rejeitar o convite
   if (invitation.receiverId !== session.user.userId) {
     return NextResponse.json({ error: "Apenas o usuário convidado pode responder ao convite" }, { status: 403 });
   }
 
-  // Se aceitar, adicionar ao grupo (se ainda não for membro)
   if (invitationStatus === "ACCEPTED") {
     const alreadyMember = await prisma.financialGroupMember.findUnique({ where: { userId_financialGroupId: { userId: invitation.receiverId, financialGroupId: invitation.groupId } } });
 
@@ -105,13 +97,11 @@ export async function PUT (req: NextRequest) {
         data: {
           userId: invitation.receiverId,
           financialGroupId: invitation.groupId,
-          isOwner: false,
         },
       });
     }
   }
 
-  // Atualizar status do convite
   const updated = await prisma.groupInvitation.update({
     where: { id },
     data: { status: invitationStatus },
@@ -120,7 +110,6 @@ export async function PUT (req: NextRequest) {
   return NextResponse.json(updated);
 }
 
-// Novo: listar convites pendentes do usuário
 export async function GET () {
   const session = await auth();
 
@@ -140,7 +129,6 @@ export async function GET () {
     },
   });
 
-  // Mapeia resposta para enviar apenas o necessário
   const mapped = invitations.map((inv) => ({
     id: inv.id,
     sender: { id: inv.sender.id, name: inv.sender.name, email: inv.sender.email },

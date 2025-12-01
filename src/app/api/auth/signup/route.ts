@@ -44,7 +44,6 @@ export async function POST (req: NextRequest) {
       }, { status: HTTP_STATUS.BAD_REQUEST });
     }
 
-    // Verificar se o usuário já existe
     const existingUser = await prisma.user.findUnique({ where: { email: data.email } });
 
     if (existingUser) {
@@ -54,7 +53,6 @@ export async function POST (req: NextRequest) {
       }, { status: HTTP_STATUS.CONFLICT });
     }
 
-    // Hash da senha
     const hashedPassword = await hash(data.password, BCRYPT_ROUNDS);
 
     // Criar usuário
@@ -76,27 +74,19 @@ export async function POST (req: NextRequest) {
       data: {
         name: "Pessoal",
         description: "Grupo financeiro pessoal",
-        members: {
-          create: {
-            userId: user.id,
-            isOwner: true,
-          },
-        },
+        ownerId: user.id,
         type: "PERSONAL",
-        createdBy: { connect: { id: user.id } },
-        categories: { create: DEFAULT_CATEGORIES.map((categoryName) => ({ name: categoryName })) },
+        members: { create: { userId: user.id } },
+        groupCategories: { create: DEFAULT_CATEGORIES.map((categoryName) => ({ name: categoryName })) },
       },
     });
 
-    // Criar método de pagamento padrão "Dinheiro"
-    await prisma.paymentMethod.create({
-      data: {
-        name: "Dinheiro",
-        type: "CASH",
-        description: "Pagamentos em espécie",
+    // Criar categorias pessoais para o usuário
+    await prisma.userCategory.createMany({
+      data: DEFAULT_CATEGORIES.map((categoryName) => ({
+        name: categoryName,
         userId: user.id,
-        isActive: true,
-      },
+      })),
     });
 
     logger.info(`Usuário criado com sucesso: ${

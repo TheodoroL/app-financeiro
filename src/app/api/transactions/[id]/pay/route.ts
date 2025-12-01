@@ -19,8 +19,6 @@ export async function PATCH (request: NextRequest, { params }: RouteParams<{ id:
       return Response.json({ error: "ID da transação inválido" }, { status: 400 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const { paidAt } = body;
 
     // Buscar a transação
     const transaction = await prisma.transaction.findFirst({
@@ -37,17 +35,12 @@ export async function PATCH (request: NextRequest, { params }: RouteParams<{ id:
     // Atualizar status para pago
     const updatedTransaction = await prisma.transaction.update({
       where: { id: transactionId },
-      data: {
-        isPaid: true,
-        status: "PAID",
-        paidAt: paidAt ? new Date(paidAt) : new Date(),
-      },
+      data: { status: "PAID" },
       include: {
-        category: true,
+        userCategory: true,
+        groupCategory: true,
         group: true,
-        paymentMethod: true,
         bankAccount: true,
-        creditCard: true,
       },
     });
 
@@ -94,17 +87,12 @@ export async function DELETE (request: NextRequest, { params }: RouteParams<{ id
     // Marcar como não paga
     const updatedTransaction = await prisma.transaction.update({
       where: { id: transactionId },
-      data: {
-        isPaid: false,
-        status: "PENDING",
-        paidAt: null,
-      },
+      data: { status: "PENDING" },
       include: {
-        category: true,
+        userCategory: true,
+        groupCategory: true,
         group: true,
-        paymentMethod: true,
         bankAccount: true,
-        creditCard: true,
       },
     });
 
@@ -145,7 +133,6 @@ export async function POST (
       include: {
         group: { include: { members: true } },
         bankAccount: true,
-        creditCard: true,
       },
     });
 
@@ -155,21 +142,19 @@ export async function POST (
 
     // Verificar permissões
     const isCreator = existingTransaction.createdById === session.user.userId;
-    const isGroupAdmin = existingTransaction.group.members.some(
-      (m) => m.userId === session.user.userId && m.isOwner,
-    );
+    const isGroupOwner = existingTransaction.group.ownerId === session.user.userId;
 
-    if (!isCreator && !isGroupAdmin) {
+    if (!isCreator && !isGroupOwner) {
       return Response.json({ error: "Sem permissão para marcar esta transação como paga" }, { status: 403 });
     }
 
     // Verificar se já está paga
-    if (existingTransaction.isPaid) {
+    if (existingTransaction.status === "PAID") {
       return Response.json({ error: "Transação já está paga" }, { status: 400 });
     }
 
-    // Validar saldo da conta bancária se for despesa E não for cartão de crédito
-    if (existingTransaction.bankAccountId && existingTransaction.type === "EXPENSE" && !existingTransaction.creditCardId) {
+    // Validar saldo da conta bancária se for despesa
+    if (existingTransaction.bankAccountId && existingTransaction.type === "EXPENSE") {
       const bankAccount = await prisma.bankAccount.findUnique({ where: { id: existingTransaction.bankAccountId } });
 
       if (bankAccount && bankAccount.balance < existingTransaction.amount) {
@@ -187,13 +172,10 @@ export async function POST (
     // Atualizar transação
     const updatedTransaction = await prisma.transaction.update({
       where: { id: transactionId },
-      data: {
-        isPaid: true,
-        paidAt: new Date(),
-        status: "PAID",
-      },
+      data: { status: "PAID" },
       include: {
-        category: true,
+        userCategory: true,
+        groupCategory: true,
         group: true,
         createdBy: {
           select: {
@@ -203,12 +185,11 @@ export async function POST (
           },
         },
         bankAccount: true,
-        creditCard: true,
       },
     });
 
-    // Atualizar saldo da conta bancária APENAS se não for cartão de crédito
-    if (existingTransaction.bankAccountId && !existingTransaction.creditCardId) {
+    // Atualizar saldo da conta bancária
+    if (existingTransaction.bankAccountId) {
       await prisma.bankAccount.update({
         where: { id: existingTransaction.bankAccountId },
         data: { balance: { [existingTransaction.type === "INCOME" ? "increment" : "decrement"]: existingTransaction.amount } },
